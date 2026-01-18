@@ -121,12 +121,11 @@ Use AskUserQuestion with multiple questions:
 questions: [
   {
     header: "Parallelization",
-    question: "How parallel should execution be? (current: enabled={...}, plan_level={...}, task_level={...})",
+    question: "Run plans in parallel? (current: enabled={current_enabled})",
     multiSelect: false,
     options: [
-      { label: "Sequential", description: "Disable parallelization" },
-      { label: "Plan-level (Recommended)", description: "Parallelize independent plans in a wave" },
-      { label: "Plan + Task-level (Aggressive)", description: "Also parallelize tasks (higher risk of conflicts)" }
+      { label: "Parallel (Recommended)", description: "Independent plans run simultaneously (limited by Max Agents)" },
+      { label: "Sequential", description: "One plan at a time" }
     ]
   },
   {
@@ -150,26 +149,15 @@ questions: [
       { label: "2", description: "Default" },
       { label: "3", description: "Only parallelize larger waves" }
     ]
-  },
-  {
-    header: "Checkpoints",
-    question: "Skip checkpoints automatically when safe? (current: {current_skip_checkpoints})",
-    multiSelect: false,
-    options: [
-      { label: "Keep checkpoints", description: "Never auto-skip checkpoints" },
-      { label: "Skip when safe", description: "Auto-skip low-risk checkpoints" }
-    ]
   }
 ]
 ```
 
 Apply mapping:
-- Sequential → `parallelization.enabled=false`, `plan_level=false`, `task_level=false`
-- Plan-level → `enabled=true`, `plan_level=true`, `task_level=false`
-- Plan+Task-level → `enabled=true`, `plan_level=true`, `task_level=true`
+- Parallel → `parallelization.enabled=true`
+- Sequential → `parallelization.enabled=false`
 - Max Agents → `max_concurrent_agents` integer
 - Threshold → `min_plans_for_parallel` integer
-- Checkpoints → `skip_checkpoints` boolean
 
 ## 6. Gates (`gates.*`)
 
@@ -263,4 +251,3 @@ git commit -m "chore(config): update gsd settings"
 - [ ] Confirms before writing
 - [ ] Optional commit supported
 </success_criteria>
-

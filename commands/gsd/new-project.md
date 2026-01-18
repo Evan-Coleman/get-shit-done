@@ -291,8 +291,8 @@ Create `.planning/config.json` with chosen mode, depth, parallelization, and enh
 - `enhancements.session_safety: true` always (default on, low overhead)
 
 **Parallelization mapping:**
-- "Parallel" selected → `parallelization.enabled: true`, `parallelization.plan_level: true`
-- "Sequential" selected → `parallelization.enabled: false`, `parallelization.plan_level: false`, `parallelization.task_level: false`
+- "Parallel" selected → `parallelization.enabled: true`
+- "Sequential" selected → `parallelization.enabled: false`
 
 **Commit config.json:**
 

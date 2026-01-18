@@ -162,6 +162,31 @@ Route by auditor result:
 - **READY:** Proceed.
 </step>
 
+<step name="parallelization_settings">
+Read parallelization settings (defaults come from template):
+
+```bash
+PAR_ENABLED=$(node ~/.claude/hooks/gsd-config.js get parallelization.enabled --default true --format raw 2>/dev/null)
+MAX_AGENTS=$(node ~/.claude/hooks/gsd-config.js get parallelization.max_concurrent_agents --default 3 --format raw 2>/dev/null)
+MIN_PLANS=$(node ~/.claude/hooks/gsd-config.js get parallelization.min_plans_for_parallel --default 2 --format raw 2>/dev/null)
+
+# Normalize numbers
+if ! echo "$MAX_AGENTS" | grep -Eq '^[0-9]+$'; then MAX_AGENTS=3; fi
+if [ "$MAX_AGENTS" -lt 1 ]; then MAX_AGENTS=1; fi
+if ! echo "$MIN_PLANS" | grep -Eq '^[0-9]+$'; then MIN_PLANS=2; fi
+if [ "$MIN_PLANS" -lt 1 ]; then MIN_PLANS=1; fi
+
+PARALLEL_ALLOWED=false
+if [ "$PAR_ENABLED" = "true" ] && [ "$MAX_AGENTS" -gt 1 ]; then
+  PARALLEL_ALLOWED=true
+fi
+```
+
+Notes:
+- If `PARALLEL_ALLOWED=false`, execute each plan sequentially (still respect waves for ordering).
+- `autonomous: false` plans (checkpoints) are always executed sequentially.
+</step>
+
 <step name="group_by_wave">
 Read `wave` from each plan's frontmatter and group by wave number:
 
@@ -232,7 +257,18 @@ Execute each wave in sequence. Autonomous plans within a wave run in parallel.
    - Bad: "Executing terrain generation plan"
    - Good: "Procedural terrain generator using Perlin noise — creates height maps, biome zones, and collision meshes. Required before vehicle physics can interact with ground."
 
-2. **Spawn all autonomous agents in wave simultaneously:**
+2. **Execute plans in wave (parallel or sequential):**
+
+Separate the wave into:
+- **Autonomous plans** (`autonomous: true`) — eligible for parallel batching
+- **Checkpoint plans** (`autonomous: false`) — always sequential (see `<checkpoint_handling>`)
+
+**If `PARALLEL_ALLOWED=true` AND number of autonomous plans in wave ≥ `MIN_PLANS`:**
+- Spawn up to `MAX_AGENTS` autonomous plans at a time (batch if needed)
+- Wait for the batch to complete before spawning the next batch
+
+**Otherwise:**
+- Execute all plans sequentially (one Task call at a time)
 
    Use Task tool with multiple parallel calls. Each agent gets prompt from subagent-task-prompt template:
 
@@ -264,11 +300,11 @@ Execute each wave in sequence. Autonomous plans within a wave run in parallel.
    </success_criteria>
    ```
 
-2. **Wait for all agents in wave to complete:**
+3. **Wait for each batch (or single plan) to complete:**
 
    Task tool blocks until each agent finishes. All parallel agents return together.
 
-3. **Report completion and what was built:**
+4. **Report completion and what was built:**
 
    For each completed agent:
    - Verify SUMMARY.md exists at expected path
@@ -297,7 +333,7 @@ Execute each wave in sequence. Autonomous plans within a wave run in parallel.
    - Bad: "Wave 2 complete. Proceeding to Wave 3."
    - Good: "Terrain system complete — 3 biome types, height-based texturing, physics collision meshes. Vehicle physics (Wave 3) can now reference ground surfaces."
 
-4. **Handle failures:**
+5. **Handle failures:**
 
    If any agent in wave fails:
    - Report which plan failed and why
@@ -305,18 +341,18 @@ Execute each wave in sequence. Autonomous plans within a wave run in parallel.
    - If continue: proceed to next wave (dependent plans may also fail)
    - If stop: exit with partial completion report
 
-5. **Execute checkpoint plans between waves:**
+6. **Execute checkpoint plans between waves:**
 
    See `<checkpoint_handling>` for details.
 
-6. **Update session heartbeat** (if session safety enabled):
+7. **Update session heartbeat** (if session safety enabled):
    ```bash
    if [ -n "$GSD_SESSION_ID" ] && [ -f ~/.claude/hooks/gsd-session.js ]; then
      node ~/.claude/hooks/gsd-session.js heartbeat --id "$GSD_SESSION_ID" 2>/dev/null || true
    fi
    ```
 
-7. **Proceed to next wave**
+8. **Proceed to next wave**
 
 </step>
 
