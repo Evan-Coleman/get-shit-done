@@ -214,32 +214,6 @@ Phase {X} appears complete. Re-run?
    - **NEEDS FIXES:** Present warnings and ask: continue / stop and fix.
    - **READY:** Proceed to wave grouping.
 
-2.6. **Parallelization Settings**
-
-Read parallelization settings (defaults come from template):
-
-```bash
-PAR_ENABLED=$(node ~/.claude/hooks/gsd-config.js get parallelization.enabled --default true --format raw 2>/dev/null)
-MAX_AGENTS=$(node ~/.claude/hooks/gsd-config.js get parallelization.max_concurrent_agents --default 3 --format raw 2>/dev/null)
-MIN_PLANS=$(node ~/.claude/hooks/gsd-config.js get parallelization.min_plans_for_parallel --default 2 --format raw 2>/dev/null)
-
-# Normalize numbers
-if ! echo "$MAX_AGENTS" | grep -Eq '^[0-9]+$'; then MAX_AGENTS=3; fi
-if [ "$MAX_AGENTS" -lt 1 ]; then MAX_AGENTS=1; fi
-if ! echo "$MIN_PLANS" | grep -Eq '^[0-9]+$'; then MIN_PLANS=2; fi
-if [ "$MIN_PLANS" -lt 1 ]; then MIN_PLANS=1; fi
-
-PARALLEL_ALLOWED=false
-if [ "$PAR_ENABLED" = "true" ] && [ "$MAX_AGENTS" -gt 1 ]; then
-  PARALLEL_ALLOWED=true
-fi
-```
-
-Notes:
-- If `PARALLEL_ALLOWED=false`, execute each plan sequentially (still respect waves for ordering).
-- `autonomous: false` plans (checkpoints) are always executed sequentially.
-- If you hit git conflicts or weird interleaving, switch to sequential via `/gsd:settings` (`parallelization.enabled=false`).
-
 3. **Group by wave**
    - Read `wave` from each plan's frontmatter
    - Group plans by wave number
@@ -247,8 +221,7 @@ Notes:
 
 4. **Execute waves**
    For each wave in order:
-   - If `PARALLEL_ALLOWED=true` AND the number of autonomous plans in the wave ≥ `MIN_PLANS`, spawn up to `MAX_AGENTS` `gsd-executor` agents at a time (batch if needed)
-   - Otherwise, execute plans sequentially (one `Task(...)` at a time)
+   - Spawn `gsd-executor` for each plan in wave (parallel Task calls)
    - Wait for completion (Task blocks)
    - Verify SUMMARYs created
    - **Update session heartbeat** (if session safety enabled):
@@ -431,11 +404,9 @@ After user runs /gsd:plan-phase {Z} --gaps:
 </offer_next>
 
 <wave_execution>
-**Parallel spawning (plan-level):**
+**Parallel spawning:**
 
-If parallelization is enabled (`PARALLEL_ALLOWED=true`) and the wave has enough autonomous plans (≥ `MIN_PLANS`), spawn up to `MAX_AGENTS` plans at a time.
-
-Example batch (3 plans):
+Spawn all plans in a wave with a single message containing multiple Task calls:
 
 ```
 Task(prompt="Execute plan at {plan_01_path}\n\nPlan: @{plan_01_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
@@ -444,8 +415,6 @@ Task(prompt="Execute plan at {plan_03_path}\n\nPlan: @{plan_03_path}\nProject st
 ```
 
 All three run in parallel. Task tool blocks until all complete.
-
-If the wave has more than `MAX_AGENTS` autonomous plans, run multiple batches sequentially.
 
 **No polling.** No background agents. No TaskOutput loops.
 </wave_execution>
