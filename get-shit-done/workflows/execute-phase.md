@@ -12,7 +12,67 @@ Read STATE.md before any operation to load project context.
 
 <process>
 
-<step name="load_project_state" priority="first">
+<step name="session_management" priority="first">
+Manage session safety before execution.
+
+Reference: `@~/.claude/get-shit-done/references/session-management.md`
+
+**Check if session safety is enabled:**
+```bash
+SESSION_SAFETY=$(cat .planning/config.json 2>/dev/null | grep -o '"session_safety":[^,}]*' | cut -d':' -f2 | tr -d ' ')
+```
+
+**If `session_safety` is explicitly `false`:** Skip to load_project_state.
+
+**Otherwise (default ON):**
+
+1. **Initialize and clean stale sessions:**
+```bash
+if [ ! -f .planning/ACTIVE-SESSIONS.json ]; then
+  echo '{"sessions":[]}' > .planning/ACTIVE-SESSIONS.json
+fi
+
+NOW=$(date +%s)
+FOUR_HOURS=14400
+jq --argjson now "$NOW" --argjson ttl "$FOUR_HOURS" '
+  .sessions = [.sessions[] | select(
+    ($now - (.started | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) < $ttl
+  )]
+' .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+  && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+```
+
+2. **Check for conflicts:**
+```bash
+CONFLICTS=$(jq -r --arg phase "$PHASE" \
+  '.sessions[] | select(.phase == $phase)' \
+  .planning/ACTIVE-SESSIONS.json 2>/dev/null)
+```
+
+If conflict found, present checkpoint with options: continue / wait / claim.
+
+3. **Register this session:**
+```bash
+TIMESTAMP=$(date +%s)
+SESSION_ID="${PHASE}-${TIMESTAMP}"
+
+jq --arg id "$SESSION_ID" \
+   --arg phase "$PHASE" \
+   --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   '.sessions += [{
+     "id": $id,
+     "phase": $phase,
+     "started": $started,
+     "last_activity": $started,
+     "status": "executing"
+   }]' .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+   && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+
+export GSD_SESSION_ID="$SESSION_ID"
+```
+</step>
+
+<step name="load_project_state">
 Before any operation, read project state:
 
 ```bash
@@ -235,7 +295,16 @@ Execute each wave in sequence. Autonomous plans within a wave run in parallel.
 
    See `<checkpoint_handling>` for details.
 
-6. **Proceed to next wave**
+6. **Update session heartbeat** (if session safety enabled):
+   ```bash
+   jq --arg id "$GSD_SESSION_ID" \
+      --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '(.sessions[] | select(.id == $id)).last_activity = $now' \
+      .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+      && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+   ```
+
+7. **Proceed to next wave**
 
 </step>
 
@@ -462,6 +531,19 @@ git add .planning/ROADMAP.md .planning/STATE.md .planning/phases/{phase_dir}/*-V
 git add .planning/REQUIREMENTS.md  # if updated
 git commit -m "docs(phase-{X}): complete phase execution"
 ```
+</step>
+
+<step name="cleanup_session">
+Remove session entry on successful completion (if session safety enabled):
+
+```bash
+jq --arg id "$GSD_SESSION_ID" \
+   '.sessions = [.sessions[] | select(.id != $id)]' \
+   .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+   && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+```
+
+Note: Stop hook (`hooks/session-stop.sh`) also attempts cleanup on session exit, but explicit cleanup here is more reliable.
 </step>
 
 <step name="offer_next">

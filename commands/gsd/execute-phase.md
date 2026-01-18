@@ -41,37 +41,91 @@ Phase: $ARGUMENTS
 
 ## 0. Session Safety Pre-flight Checks
 
+Reference: `@~/.claude/get-shit-done/references/session-management.md`
+
 **Check if session safety is enabled:**
 ```bash
 SESSION_SAFETY=$(cat .planning/config.json 2>/dev/null | grep -o '"session_safety":[^,}]*' | cut -d':' -f2 | tr -d ' ')
 ```
 
-**If `session_safety` is not explicitly `false`** (default ON), run these checks:
+**If `session_safety` is explicitly `false`:** Skip all session checks, proceed to step 0b.
 
-### 0a. Session Conflict Check
+**Otherwise (default ON):**
+
+### 0a. Initialize Session File & Clean Stale Sessions
 
 ```bash
-if [ -f .planning/ACTIVE-SESSIONS.json ]; then
-  cat .planning/ACTIVE-SESSIONS.json
+# Create file if missing
+if [ ! -f .planning/ACTIVE-SESSIONS.json ]; then
+  echo '{"sessions":[]}' > .planning/ACTIVE-SESSIONS.json
 fi
+
+# Clean stale sessions (>4 hours old)
+NOW=$(date +%s)
+FOUR_HOURS=14400
+jq --argjson now "$NOW" --argjson ttl "$FOUR_HOURS" '
+  .sessions = [.sessions[] | select(
+    ($now - (.started | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) < $ttl
+  )]
+' .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+  && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
 ```
 
-**If another session claims this phase:**
+### 0a.1. Check for Conflicts
+
+```bash
+# PHASE is the target phase (normalized in step 1)
+CONFLICTS=$(jq -r --arg phase "$PHASE" \
+  '.sessions[] | select(.phase == $phase)' \
+  .planning/ACTIVE-SESSIONS.json 2>/dev/null)
 ```
-⚠️ Session Conflict Detected
+
+**If conflict found:**
+```
+╔══════════════════════════════════════════════════════════════╗
+║  CHECKPOINT: Session Conflict                                ║
+╚══════════════════════════════════════════════════════════════╝
 
 Another session is working on Phase {X}:
 - Session ID: {id}
 - Started: {timestamp}
 - Last activity: {timestamp}
 
-Options:
-1. Continue anyway (may cause conflicts)
-2. Wait for other session to complete
-3. Claim this phase (invalidates other session)
+──────────────────────────────────────────────────────────────
+→ Select: continue / wait / claim
+──────────────────────────────────────────────────────────────
 ```
 
-Wait for user response. If continuing, update ACTIVE-SESSIONS.json with this session.
+Handle response:
+- **continue** — Proceed with registration (may cause git conflicts)
+- **wait** — Exit gracefully, user will try later
+- **claim** — Remove old session entry, then register this one
+
+### 0a.2. Register This Session
+
+```bash
+# Generate session ID
+TIMESTAMP=$(date +%s)
+SESSION_ID="${PHASE}-${TIMESTAMP}"
+
+# Add session entry
+jq --arg id "$SESSION_ID" \
+   --arg phase "$PHASE" \
+   --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   '.sessions += [{
+     "id": $id,
+     "phase": $phase,
+     "started": $started,
+     "last_activity": $started,
+     "status": "executing"
+   }]' .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+   && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+
+# Export for stop hook cleanup
+export GSD_SESSION_ID="$SESSION_ID"
+```
+
+Display: `Session registered: ${SESSION_ID}`
 
 ### 0b. Context Resume Detection
 
@@ -134,6 +188,14 @@ Phase {X} appears complete. Re-run?
    - Spawn `gsd-executor` for each plan in wave (parallel Task calls)
    - Wait for completion (Task blocks)
    - Verify SUMMARYs created
+   - **Update session heartbeat** (if session safety enabled):
+     ```bash
+     jq --arg id "$GSD_SESSION_ID" \
+        --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '(.sessions[] | select(.id == $id)).last_activity = $now' \
+        .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+        && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+     ```
    - Proceed to next wave
 
 5. **Aggregate results**
@@ -179,7 +241,15 @@ Phase {X} appears complete. Re-run?
     - Stage REQUIREMENTS.md if updated: `git add .planning/REQUIREMENTS.md`
     - Commit: `docs({phase}): complete {phase-name} phase`
 
-11. **Offer next steps**
+11. **Clean up session** (if session safety enabled)
+    ```bash
+    jq --arg id "$GSD_SESSION_ID" \
+       '.sessions = [.sessions[] | select(.id != $id)]' \
+       .planning/ACTIVE-SESSIONS.json > .planning/ACTIVE-SESSIONS.json.tmp \
+       && mv .planning/ACTIVE-SESSIONS.json.tmp .planning/ACTIVE-SESSIONS.json
+    ```
+
+12. **Offer next steps**
     - Route to next action (see `<offer_next>`)
 </process>
 
