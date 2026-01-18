@@ -22,6 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Config template now includes `enhancements` section with `decision_ledger`, `codebase_research`, and `plan_audit` options
 - `/gsd:discuss-phase` now supports two flows: standard (gray areas) or enhanced (Decision Ledger mode with terminology and entry points)
 - `/gsd:plan-phase` now optionally spawns codebase researcher before domain research when enhancement enabled
+- Codebase research output is now more auditable: `*-CODEBASE-RESEARCH.md` includes `## Commands Run` and `## Gaps / Not Checked`, and the planner treats critical gaps as tasks/verification (not silent unknowns)
 
 ## [1.6.4] - 2026-01-17
 
